@@ -13,113 +13,114 @@
 
 var fs = require('fs');
 var driver = require('node-phantom-simple');
-// test
+require('phantomjs-polyfill');
+
 var downloadFileSync = function(url: string, cookies: ?string): string {
-  var args = ['--silent', '-L', '--insecure', url];
+    var args = ['--silent', '-L', '--insecure', url];
 
-  if (cookies) {
-    args.push('-H', 'Cookie: ${cookies}');
-  }
+    if (cookies) {
+        args.push('-H', 'Cookie: ${cookies}');
+    }
 
-  return require('child_process')
-    .execFileSync('curl', args, {encoding: 'utf8'}).toString();
+    return require('child_process')
+        .execFileSync('curl', args, {encoding: 'utf8'}).toString();
 };
 
 type FileInfo = {
-  path: string,
-  deletedLines: Array<number>,
+    path: string,
+    deletedLines: Array<number>,
 };
 
 function startsWith(str, start) {
-  return str.substr(0, start.length) === start;
+    return str.substr(0, start.length) === start;
 }
 
 function parseDiffFile(lines: Array<string>): FileInfo {
-  var deletedLines = [];
+    var deletedLines = [];
 
-  // diff --git a/path b/path
-  var line = lines.pop();
-  if (!line.match(/^diff --git a\//)) {
-    throw new Error('Invalid line, should start with `diff --git a/`, instead got \n' + line + '\n');
-  }
-  var fromFile = line.replace(/^diff --git a\/(.+) b\/.+/g, '$1');
+    // diff --git a/path b/path
+    var line = lines.pop();
+    if (!line.match(/^diff --git a\//)) {
+        throw new Error('Invalid line, should start with `diff --git a/`, instead got \n' + line + '\n');
+    }
+    var fromFile = line.replace(/^diff --git a\/(.+) b\/.+/g, '$1');
 
-  // index sha..sha mode
-  line = lines.pop();
-  if (startsWith(line, 'deleted file') ||
-      startsWith(line, 'new file')) {
+    // index sha..sha mode
     line = lines.pop();
-  }
-
-  line = lines.pop();
-  if (startsWith(line, 'Binary files')) {
-    // We just ignore binary files (mostly images). If we want to improve the
-    // precision in the future, we could look at the history of those files
-    // to get more names.
-  } else if (startsWith(line, '--- ')) {
-    // +++ path
-    line = lines.pop();
-    if (!line.match(/^\+\+\+ /)) {
-      throw new Error('Invalid line, should start with `+++`, instead got \n' + line + '\n');
+    if (startsWith(line, 'deleted file') ||
+        startsWith(line, 'new file')) {
+        line = lines.pop();
     }
 
-    var currentFromLine = 0;
-    while (lines.length > 0) {
-      line = lines.pop();
-      if (startsWith(line, 'diff --git')) {
-        lines.push(line);
-        break;
-      }
-
-      // @@ -from_line,from_count +to_line,to_count @@ first line
-      if (startsWith(line, '@@')) {
-        var matches = line.match(/^\@\@ -([0-9]+),?([0-9]+)? \+([0-9]+),?([0-9]+)? \@\@/);
-        if (!matches) {
-          continue;
+    line = lines.pop();
+    if (startsWith(line, 'Binary files')) {
+        // We just ignore binary files (mostly images). If we want to improve the
+        // precision in the future, we could look at the history of those files
+        // to get more names.
+    } else if (startsWith(line, '--- ')) {
+        // +++ path
+        line = lines.pop();
+        if (!line.match(/^\+\+\+ /)) {
+            throw new Error('Invalid line, should start with `+++`, instead got \n' + line + '\n');
         }
 
-        var from_line = matches[1];
-        var from_count = matches[2];
-        var to_line = matches[3];
-        var to_count = matches[4];
+        var currentFromLine = 0;
+        while (lines.length > 0) {
+            line = lines.pop();
+            if (startsWith(line, 'diff --git')) {
+                lines.push(line);
+                break;
+            }
 
-        currentFromLine = +from_line;
-        continue;
-      }
+            // @@ -from_line,from_count +to_line,to_count @@ first line
+            if (startsWith(line, '@@')) {
+                var matches = line.match(/^\@\@ -([0-9]+),?([0-9]+)? \+([0-9]+),?([0-9]+)? \@\@/);
+                if (!matches) {
+                    continue;
+                }
 
-      if (startsWith(line, '-')) {
-        deletedLines.push(currentFromLine);
-      }
-      if (!startsWith(line, '+')) {
-        currentFromLine++;
-      }
+                var from_line = matches[1];
+                var from_count = matches[2];
+                var to_line = matches[3];
+                var to_count = matches[4];
+
+                currentFromLine = +from_line;
+                continue;
+            }
+
+            if (startsWith(line, '-')) {
+                deletedLines.push(currentFromLine);
+            }
+            if (!startsWith(line, '+')) {
+                currentFromLine++;
+            }
+        }
     }
-  }
 
-  return {
-    path: fromFile,
-    deletedLines: deletedLines,
-  };
+    return {
+        path: fromFile,
+        deletedLines: deletedLines,
+    };
 }
 
 function parseDiff(diff: string): Array<FileInfo> {
-  var files = [];
-  // The algorithm is designed to be best effort. If the http request failed
-  // for some reason and we get an empty file, we should not crash.
-  if (!diff || !diff.match(/^diff/)) {
+    var files = [];
+    // The algorithm is designed to be best effort. If the http request failed
+    // for some reason and we get an empty file, we should not crash.
+    if (!diff || !diff.match(/^diff/)) {
+        return files;
+    }
+
+    var lines = diff.trim().split('\n');
+    // Hack Array doesn't have shift/unshift to work from the beginning of the
+    // array, so we reverse the entire array in order to be able to use pop/add.
+    lines.reverse();
+
+    while (lines.length > 0) {
+        files.push(parseDiffFile(lines));
+    }
+
     return files;
-  }
-
-  var lines = diff.trim().split('\n');
-  // Hack Array doesn't have shift/unshift to work from the beginning of the
-  // array, so we reverse the entire array in order to be able to use pop/add.
-  lines.reverse();
-
-  while (lines.length > 0) {
-    files.push(parseDiffFile(lines));
-  }
-
-  return files;
 }
 
 /**
@@ -142,83 +143,83 @@ function parseDiff(diff: string): Array<FileInfo> {
  * So, might as well use the fastest one of the two: regex :)
  */
 function parseBlame(blame: string): Array<string> {
-  // The way the document is structured is that commits and lines are
-  // interleaved. So every time we see a commit we grab the author's name
-  // and every time we see a line we log the last seen author.
-  var re = /(class="commit-author-link has_tooltip">([^<]+)<\/a> authored)/g;
+    // The way the document is structured is that commits and lines are
+    // interleaved. So every time we see a commit we grab the author's name
+    // and every time we see a line we log the last seen author.
+    var re = /(class="commit-author-link has_tooltip">([^<]+)<\/a> authored)/g;
 
-  var currentAuthor = 'none';
-  var lines = [];
-  var match;
-  while (match = re.exec(blame)) {
-    if (match[2]) {
-      currentAuthor = match[2];
-    } else {
-      lines.push(currentAuthor);
+    var currentAuthor = 'none';
+    var lines = [];
+    var match;
+    while (match = re.exec(blame)) {
+        if (match[2]) {
+            currentAuthor = match[2];
+        } else {
+            lines.push(currentAuthor);
+        }
     }
-  }
 
-  return lines;
+    return lines;
 }
 
 function getDeletedOwners(
-  files: Array<FileInfo>,
-  blames: { [key: string]: Array<string> }
+    files: Array<FileInfo>,
+    blames: { [key: string]: Array<string> }
 ): { [key: string]: number } {
-  var owners = {};
-  files.forEach(function(file) {
-    var blame = blames[file['path']];
-    if (!blame) {
-      return;
-    }
-    file.deletedLines.forEach(function (line) {
-      // In a perfect world, this should never fail. However, in practice, the
-      // blame request may fail, the blame is checking against master and the
-      // pull request isn't, the blame file was too big and the curl wrapper
-      // only read the first n bytes...
-      // Since the output of the algorithm is best effort, it's better to just
-      // swallow errors and have a less accurate implementation than to crash.
-      var name = blame[line - 1];
-      if (!name) {
-        return;
-      }
-      owners[name] = (owners[name] || 0) + 1;
+    var owners = {};
+    files.forEach(function(file) {
+        var blame = blames[file['path']];
+        if (!blame) {
+            return;
+        }
+        file.deletedLines.forEach(function (line) {
+            // In a perfect world, this should never fail. However, in practice, the
+            // blame request may fail, the blame is checking against master and the
+            // pull request isn't, the blame file was too big and the curl wrapper
+            // only read the first n bytes...
+            // Since the output of the algorithm is best effort, it's better to just
+            // swallow errors and have a less accurate implementation than to crash.
+            var name = blame[line - 1];
+            if (!name) {
+                return;
+            }
+            owners[name] = (owners[name] || 0) + 1;
+        });
     });
-  });
-  return owners;
+    return owners;
 }
 
 function getAllOwners(
-  files: Array<FileInfo>,
-  blames: { [key: string]: Array<string> }
+    files: Array<FileInfo>,
+    blames: { [key: string]: Array<string> }
 ): { [key: string]: number } {
-  var owners = {};
-  files.forEach(function(file) {
-    var blame = blames[file.path];
-    if (!blame) {
-      return;
-    }
-    for (var i = 0; i < blame.length; ++i) {
-      var name = blame[i];
-      if (!name) {
-        return;
-      }
-      owners[name] = (owners[name] || 0) + 1;
-    }
-  });
-  return owners;
+    var owners = {};
+    files.forEach(function(file) {
+        var blame = blames[file.path];
+        if (!blame) {
+            return;
+        }
+        for (var i = 0; i < blame.length; ++i) {
+            var name = blame[i];
+            if (!name) {
+                return;
+            }
+            owners[name] = (owners[name] || 0) + 1;
+        }
+    });
+    return owners;
 }
 
 function getSortedOwners(
-  owners: { [key: string]: number }
+    owners: { [key: string]: number }
 ): Array<string> {
-  var sorted_owners = Object.keys(owners);
-  sorted_owners.sort(function(a, b) {
-    var countA = owners[a];
-    var countB = owners[b];
-    return countA > countB ? -1 : (countA < countB ? 1 : 0);
-  });
-  return sorted_owners;
+    var sorted_owners = Object.keys(owners);
+    sorted_owners.sort(function(a, b) {
+        var countA = owners[a];
+        var countB = owners[b];
+        return countA > countB ? -1 : (countA < countB ? 1 : 0);
+    });
+    return sorted_owners;
 }
 
 /**
@@ -228,135 +229,135 @@ function getSortedOwners(
  * you won't be able to get anymore work done when it happens :(
  */
 function fetch(url: string): string {
-  if (!module.exports.enableCachingForDebugging) {
-    return downloadFileSync(url);
-  }
+    if (!module.exports.enableCachingForDebugging) {
+        return downloadFileSync(url);
+    }
 
-  var cacheDir = __dirname + '/cache/';
+    var cacheDir = __dirname + '/cache/';
 
-  if (!fs.existsSync(cacheDir)) {
-    fs.mkdir(cacheDir);
-  }
-  var cache_key = cacheDir + url.replace(/[^a-zA-Z0-9-_\.]/g, '-');
-  if (!fs.existsSync(cache_key)) {
-    var file = downloadFileSync(url);
-    fs.writeFileSync(cache_key, file);
-  }
-  return fs.readFileSync(cache_key, 'utf8');
+    if (!fs.existsSync(cacheDir)) {
+        fs.mkdir(cacheDir);
+    }
+    var cache_key = cacheDir + url.replace(/[^a-zA-Z0-9-_\.]/g, '-');
+    if (!fs.existsSync(cache_key)) {
+        var file = downloadFileSync(url);
+        fs.writeFileSync(cache_key, file);
+    }
+    return fs.readFileSync(cache_key, 'utf8');
 }
 
 function getBlame(url){
     var username = process.env.GITLAB_USER;
     var password = process.env.GITLAB_PASSWORD;
     return new Promise(function(resolve, reject){
-       driver.create({ parameters: { 'ignore-ssl-errors': 'yes' } }, function(err, browser) {
-        if(err){
-            throw err;
-        }
-       return browser.createPage(function(err,page) {
-        //track whether the page is in the progress of loading
-        var loadInProgress = false;
-        
-        page.onConsoleMessage = function(msg) {
-          console.log(msg);
-        };
-           
-        page.onError = function(msg, trace) {
-          var msgStack = ['ERROR: ' + msg];
+        driver.create({ parameters: { 'ignore-ssl-errors': 'yes' } }, function(err, browser) {
+            if(err){
+                throw err;
+            }
+            return browser.createPage(function(err,page) {
+                //track whether the page is in the progress of loading
+                var loadInProgress = false;
 
-          if (trace && trace.length) {
-            msgStack.push('TRACE:');
-            trace.forEach(function(t) {
-              msgStack.push(' -> ' + t.file + ': ' + t.line + (t.function ? ' (in function "' + t.function +'")' : ''));
-            });
-          }
+                page.onConsoleMessage = function(msg) {
+                    console.log(msg);
+                };
 
-          console.error(msgStack.join('\n'));
-        };
+                page.onError = function(msg, trace) {
+                    var msgStack = ['ERROR: ' + msg];
 
-        page.onLoadStarted = function() {
-          loadInProgress = true;
-        };
-
-        page.onLoadFinished = function() {
-          loadInProgress = false;
-        };
-           
-        var steps = [
-          function() {
-            page.open(process.env.GITLAB_URL + '/users/signin');
-          },
-          function() {
-            //Enter Credentials by passing them into evaluate
-            page.evaluate(function(username, password) {
-              document.getElementById('user_login').value = username;
-              document.getElementById('user_password').value = password;
-              document.getElementById('new_user').submit();
-            },
-            username,
-            password,
-            function(){
-              //callback not used  
-            });
-          },
-          function() {
-               page.open(url);
-          },
-          function() {
-            page.evaluate(function () {
-                var authors = [];
-
-                $('.commit-author-link').each(function () {
-                    var author = $(this).text();
-                    if(authors.indexOf(author) == -1){
-                        authors.push(author); 
+                    if (trace && trace.length) {
+                        msgStack.push('TRACE:');
+                        trace.forEach(function(t) {
+                            msgStack.push(' -> ' + t.file + ': ' + t.line + (t.function ? ' (in function "' + t.function +'")' : ''));
+                        });
                     }
-                });
 
-                return authors;
-              }, function (err,result) {
-                resolve(result);
-              });
-          }
-        ];
-        
-        var testindex = 0;
-        var interval = setInterval(function() {
-          if(loadInProgress){
-              return;
-          }
-          if (typeof steps[testindex] == "function") {
-            console.log("step " + (testindex + 1) );
-            steps[testindex]();
-            testindex++;
-          } else {              
-             clearInterval(interval);
-             browser.exit();
-          }
-        }, 2000);
-      }); 
-    }); 
+                    console.error(msgStack.join('\n'));
+                };
+
+                page.onLoadStarted = function() {
+                    loadInProgress = true;
+                };
+
+                page.onLoadFinished = function() {
+                    loadInProgress = false;
+                };
+
+                var steps = [
+                    function() {
+                        page.open(process.env.GITLAB_URL + '/users/signin');
+                    },
+                    function() {
+                        //Enter Credentials by passing them into evaluate
+                        page.evaluate(function(username, password) {
+                                document.getElementById('username').value = username;
+                                document.getElementById('password').value = password;
+                                document.getElementById('new_ldap_user').submit();
+                            },
+                            username,
+                            password,
+                            function(){
+                                //callback not used
+                            });
+                    },
+                    function() {
+                        page.open(url);
+                    },
+                    function() {
+                        page.evaluate(function () {
+                            var authors = [];
+
+                            $('.commit-author-link').each(function () {
+                                var author = $(this).text();
+                                if(authors.indexOf(author) == -1){
+                                    authors.push(author);
+                                }
+                            });
+
+                            return authors;
+                        }, function (err,result) {
+                            resolve(result);
+                        });
+                    }
+                ];
+
+                var testindex = 0;
+                var interval = setInterval(function() {
+                    if(loadInProgress){
+                        return;
+                    }
+                    if (typeof steps[testindex] == "function") {
+                        console.log("step " + (testindex + 1) );
+                        steps[testindex]();
+                        testindex++;
+                    } else {
+                        clearInterval(interval);
+                        browser.exit();
+                    }
+                }, 2000);
+            });
+        });
     });
 }
 
 /**
 
-/**
-  * Returns a new list of owners, with inelligible owners removed.
-  * An eligible owner must:
-  *   - not be in the userBlacklist in the provided config
-  */
+ /**
+ * Returns a new list of owners, with inelligible owners removed.
+ * An eligible owner must:
+ *   - not be in the userBlacklist in the provided config
+ */
 function getEligibleOwners(
-  owners: Array<string>,
-  config: Object
+    owners: Array<string>,
+    config: Object
 ): Array<string> {
-  return owners;
-  
-  //TODO: Does gitlab implement this feature?
-  /*return owners.filter(function(owner) {
-    return config.userBlacklist.indexOf(owner) < 0;
-  })});
-  */
+    return owners;
+
+    //TODO: Does gitlab implement this feature?
+    /*return owners.filter(function(owner) {
+     return config.userBlacklist.indexOf(owner) < 0;
+     })});
+     */
 }
 
 /**
@@ -386,73 +387,74 @@ function getEligibleOwners(
  *  them, concat them and finally take the first 3 names.
  */
 function guessOwners(
-  allOwners: Array<string>,
-  creator: string
+    allOwners: Array<string>,
+    creator: string
 ): Array<string> {
-  return []
-    .concat(allOwners)
-    .filter(function(owner, index, self) {
-        return self.indexOf(owner) === index;
-    })
-    .filter(function(owner) {
-      return owner !== 'none';
-    })
-    .filter(function(owner) {
-      return owner !== creator;
-    })
-    /*.filter(function(owner) {
-      return config.userBlacklist.indexOf(owner) === -1;
-    })*/
-    .slice(0, 3);
+    return []
+        .concat(allOwners)
+        .filter(function(owner, index, self) {
+            return self.indexOf(owner) === index;
+        })
+        .filter(function(owner) {
+            return owner !== 'none';
+        })
+        .filter(function(owner) {
+            return owner !== creator;
+        })
+        /*.filter(function(owner) {
+         return config.userBlacklist.indexOf(owner) === -1;
+         })*/
+        .slice(0, 3);
 }
 
 function guessOwnersForPullRequest(
-  repoURL: string,
-  sha1: string,
-  files: Array<string>,
-  creator: string,
-  config: Object,//NOTE: This will be null for the moment
-  targetBranch: string
+    repoURL: string,
+    sha1: string,
+    files: Array<string>,
+    creator: string,
+    config: Object,//NOTE: This will be null for the moment
+    targetBranch: string
 ): Array<string> {
-  return new Promise(function(resolve, reject) {
-      // There are going to be degenerated changes that end up modifying hundreds
-      // of files. In theory, it would be good to actually run the algorithm on
-      // all of them to get the best set of reviewers. In practice, we don't
-      // want to do hundreds of http requests. Using the top 5 files is enough
-      // to get us 3 people that may have context.
-      /*files.sort(function(a, b) {
-        var countA = a.deletedLines.length;
-        var countB = b.deletedLines.length;
-        return countA > countB ? -1 : (countA < countB ? 1 : 0);
-      });*/
-      files = files.slice(0, 5);
+    return new Promise(function(resolve, reject) {
+        // There are going to be degenerated changes that end up modifying hundreds
+        // of files. In theory, it would be good to actually run the algorithm on
+        // all of them to get the best set of reviewers. In practice, we don't
+        // want to do hundreds of http requests. Using the top 5 files is enough
+        // to get us 3 people that may have context.
+        /*files.sort(function(a, b) {
+         var countA = a.deletedLines.length;
+         var countB = b.deletedLines.length;
+         return countA > countB ? -1 : (countA < countB ? 1 : 0);
+         });*/
+        files = files.slice(0, 5);
 
-      var authors = [];
-      var promises = [];
-      
-      files.forEach(function(file) {
-        promises.push(new Promise(function(resolve, reject) {
-            getBlame(repoURL + '/blame/' + sha1 + '/' + file.old_path)
-            .then(function(athrs){
-              authors = authors.concat(athrs);
-              resolve();
-            });   
-        }));
-      });
+        var authors = [];
+        var promises = [];
 
-      // This is the line that implements the actual algorithm, all the lines
-      // before are there to fetch and extract the data needed.
-      Promise.all(promises)
-      .then(function() { 
-          resolve(guessOwners(authors));
-      })
-      .catch(console.error);
+        files.forEach(function(file) {
+            promises.push(new Promise(function(resolve, reject) {
+                console.log(repoURL + '/blame/' + sha1 + '/' + file.old_path);
+                getBlame(repoURL + '/blame/' + sha1 + '/' + file.old_path)
+                    .then(function(athrs){
+                        authors = authors.concat(athrs);
+                        resolve();
+                    });
+            }));
+        });
+
+        // This is the line that implements the actual algorithm, all the lines
+        // before are there to fetch and extract the data needed.
+        Promise.all(promises)
+            .then(function() {
+                resolve(guessOwners(authors));
+            })
+            .catch(console.error);
     });
 }
 
 module.exports = {
-  enableCachingForDebugging: false,
-  parseDiff: parseDiff,
-  parseBlame: parseBlame,
-  guessOwnersForPullRequest: guessOwnersForPullRequest
+    enableCachingForDebugging: false,
+    parseDiff: parseDiff,
+    parseBlame: parseBlame,
+    guessOwnersForPullRequest: guessOwnersForPullRequest
 };
