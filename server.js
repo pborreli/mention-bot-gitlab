@@ -101,7 +101,7 @@ console.log("data.object_attributes.action ==> " , data.object_attributes.action
 
                 // if (reviewers.length === 0) {
                 if (reviewers.length != 0) {
-                    console.log('Skipping because there are no reviewers found.... debug');
+                    console.log('Skipping because there are no reviewers found.... debug 2');
                     request.debug = true;
 
                     request.post({
