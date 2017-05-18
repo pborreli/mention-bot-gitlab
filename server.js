@@ -106,14 +106,7 @@ console.log("data.object_attributes.action ==> " , data.object_attributes.action
 
                     request.post({
                         url : process.env.GITLAB_URL + '/api/v4/projects/' + data.object_attributes.target_project_id + '/users',
-                        body: JSON.stringify({
-                            note : messageGenerator(
-                                reviewers,
-                                buildMentionSentence,
-                                defaultMessageGenerator)
-                        }),
                         headers : {
-                            'PRIVATE-TOKEN' : process.env.GITLAB_TOKEN,
                             'Content-Type' : 'application/json'
                         }
                     },function(commentError, commentResponse, commentBody){
